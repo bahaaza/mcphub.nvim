@@ -121,6 +121,27 @@ require("mcphub").setup({
 
 `CWD` will be set to the working directory of the current running `mcp-hub`. Basic environment variables (`HOME`, `USER`, `TERM`, `SHELL`, etc.) are always available.
 
+**Automatic Per-Directory Hub Instances**: When you use `${CWD}` or `${workspace}` in your server configuration (in command, args, or env), MCP Hub automatically detects this and spawns separate hub instances for each directory. This means:
+
+- Different directories get different ports (even in global mode without workspace config files)
+- When you `cd` to a new directory, MCP Hub automatically switches to a hub instance with that directory's `${CWD}`
+- Existing hub instances are reused when returning to previously visited directories
+
+This is useful for servers like `mcp-server-filesystem` that need access to specific project directories:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "uvx",
+      "args": ["mcp-server-filesystem", "${CWD}"]
+    }
+  }
+}
+```
+
+With this configuration, each directory you visit will get its own hub instance with `${CWD}` correctly pointing to that directory.
+
 Additional variables can be set via:
 1. **global_env** configuration in MCP Hub setup
 2. **Process environment** when the hub starts

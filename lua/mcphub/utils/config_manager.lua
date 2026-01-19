@@ -457,4 +457,89 @@ function M.initialize()
     return M.refresh_config()
 end
 
+--- Directory-dependent variables that require per-directory hub instances
+local CWD_VARIABLES = { "${CWD}", "${workspace}" }
+
+--- Check if a string contains any directory-dependent variable
+--- @param str string The string to check
+--- @return boolean found True if any CWD variable is found
+--- @return string|nil variable The variable that was found
+local function contains_cwd_variable(str)
+    for _, var in ipairs(CWD_VARIABLES) do
+        if str:find(var, 1, true) then
+            return true, var
+        end
+    end
+    return false, nil
+end
+
+--- Check if any server config uses directory-dependent variables (${CWD}, ${workspace}) in command, args, or env
+--- This is used to determine if different directories should get different hub instances
+--- @param config_files? string[] Config files to check (defaults to current hub config files)
+--- @return boolean uses_cwd True if any server uses directory-dependent variables
+function M.config_uses_cwd_variable(config_files)
+    config_files = config_files or (State.current_hub and State.current_hub.config_files) or {}
+
+    for _, file_path in ipairs(config_files) do
+        local file_config = State.config_files_cache and State.config_files_cache[file_path]
+        if not file_config then
+            -- Try to load the config file
+            local json, err = read_config_file(file_path)
+            if json then
+                file_config = normalize_config_format(json)
+            else
+                log.debug("ConfigManager: Failed to read config file for CWD check: " .. (err or ""))
+            end
+        end
+
+        if file_config and file_config.mcpServers then
+            for server_name, server_config in pairs(file_config.mcpServers) do
+                -- Check command
+                if server_config.command and type(server_config.command) == "string" then
+                    local found, var = contains_cwd_variable(server_config.command)
+                    if found then
+                        log.debug("ConfigManager: Found " .. var .. " in command of server: " .. server_name)
+                        return true
+                    end
+                end
+
+                -- Check args
+                if server_config.args and type(server_config.args) == "table" then
+                    for _, arg in ipairs(server_config.args) do
+                        if type(arg) == "string" then
+                            local found, var = contains_cwd_variable(arg)
+                            if found then
+                                log.debug("ConfigManager: Found " .. var .. " in args of server: " .. server_name)
+                                return true
+                            end
+                        end
+                    end
+                end
+
+                -- Check env
+                if server_config.env and type(server_config.env) == "table" then
+                    for env_key, env_val in pairs(server_config.env) do
+                        if type(env_val) == "string" then
+                            local found, var = contains_cwd_variable(env_val)
+                            if found then
+                                log.debug(
+                                    "ConfigManager: Found "
+                                        .. var
+                                        .. " in env."
+                                        .. env_key
+                                        .. " of server: "
+                                        .. server_name
+                                )
+                                return true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return false
+end
+
 return M

@@ -20,9 +20,11 @@ local State = {
     -- Current hub context
     current_hub = {
         port = nil,
+        cwd = nil, -- Working directory used by the current hub
         workspace_root = nil,
         config_files = {}, -- Array of config files being used
         is_workspace_mode = false,
+        uses_cwd_variable = false, -- Whether ${CWD} is used in server configs
     },
 
     -- Config files cache

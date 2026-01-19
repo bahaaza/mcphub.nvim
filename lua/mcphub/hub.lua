@@ -145,6 +145,7 @@ function MCPHub:_resolve_workspace_context()
         cwd = workspace_info.root_dir or cwd,
         config_files = config_files,
         is_workspace_mode = true,
+        uses_cwd_variable = config_manager.config_uses_cwd_variable(config_files),
         workspace_root = workspace_info.root_dir or cwd,
         existing_hub = existing_hub, -- Include hub info from cache
     }
@@ -155,13 +156,63 @@ end
 function MCPHub:_resolve_global_context()
     local cwd = vim.fn.getcwd()
     local port = self.setup_opts.port
-    -- For global mode, port will always be the one provided in setup_opts, so we can get the existing hub using that
+    local config_files = { self.config }
+
+    -- Check if ${CWD} is used in server configs
+    -- If so, we need to generate a unique port per directory
+    local uses_cwd = config_manager.config_uses_cwd_variable(config_files)
+    if uses_cwd then
+        log.debug("Global config uses ${CWD}, generating per-directory port")
+
+        -- Check for existing hub with matching cwd and config files
+        local existing_hub = workspace_utils.find_matching_workspace_hub(cwd, config_files)
+        if existing_hub then
+            port = existing_hub.port
+            log.debug("Found existing hub for cwd: " .. cwd .. " on port: " .. port)
+        else
+            -- Generate new port based on cwd hash
+            if State.config.workspace.get_port and type(State.config.workspace.get_port) == "function" then
+                port = State.config.workspace.get_port()
+                if not port or type(port) ~= "number" then
+                    vim.notify("Invalid port returned by workspace.get_port function", vim.log.levels.ERROR)
+                    return nil
+                end
+                log.debug("Using custom port from workspace.get_port: " .. port)
+            else
+                port = workspace_utils.find_available_port(
+                    cwd,
+                    State.config.workspace.port_range,
+                    100 -- max attempts
+                )
+            end
+
+            if not port then
+                vim.notify("No available ports for cwd-based hub", vim.log.levels.ERROR)
+                return nil
+            end
+
+            log.debug("Generated new port for cwd: " .. cwd .. " -> port: " .. port)
+        end
+
+        return {
+            port = port,
+            cwd = cwd,
+            config_files = config_files,
+            is_workspace_mode = false,
+            uses_cwd_variable = true,
+            workspace_root = cwd,
+            existing_hub = existing_hub,
+        }
+    end
+
+    -- For global mode without ${CWD}, port will always be the one provided in setup_opts
     local existing_hub = workspace_utils.get_workspace_hub_info(port)
     return {
         port = port,
         cwd = cwd,
-        config_files = { self.config },
+        config_files = config_files,
         is_workspace_mode = false,
+        uses_cwd_variable = false,
         workspace_root = cwd,
         existing_hub = existing_hub,
     }
@@ -391,7 +442,9 @@ end
 
 --- Handle directory changes - reconnect to appropriate workspace hub
 function MCPHub:handle_directory_change()
-    if not State.config.workspace.enabled then
+    -- Check if workspace mode is enabled OR if ${CWD} is used in global config
+    local uses_cwd = config_manager.config_uses_cwd_variable()
+    if not State.config.workspace.enabled and not uses_cwd then
         return
     end
 
@@ -419,6 +472,11 @@ function MCPHub:handle_directory_change()
     if tostring(new_context.port) ~= tostring(current_context.port) then
         needs_switch = true
         reason = string.format("port change (%s -> %s)", current_context.port, new_context.port)
+    elseif new_context.uses_cwd_variable and new_context.cwd ~= current_context.cwd then
+        -- When ${CWD} is used, also check if the cwd changed
+        -- This handles the case where port might be the same but cwd differs
+        needs_switch = true
+        reason = string.format("cwd change (%s -> %s)", current_context.cwd or "nil", new_context.cwd)
     end
 
     if needs_switch then
